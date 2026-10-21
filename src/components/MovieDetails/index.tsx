@@ -104,6 +104,8 @@ const messages = defineMessages('components.MovieDetails', {
   watchlistDeleted:
     '<strong>{title}</strong> Removed from watchlist successfully!',
   watchlistError: 'Something went wrong. Please try again.',
+  watchlistNotOnPlex:
+    "<strong>{title}</strong> isn't available on Plex, so it can't be added to your watchlist.",
   removefromwatchlist: 'Remove From Watchlist',
   addtowatchlist: 'Add To Watchlist',
 });
@@ -349,11 +351,24 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
         );
         setToggleWatchlist((prevState) => !prevState);
       }
-    } catch {
-      addToast(intl.formatMessage(messages.watchlistError), {
-        appearance: 'error',
-        autoDismiss: true,
-      });
+    } catch (e) {
+      // The server answers 404 when the title can't be found on Plex.
+      if (axios.isAxiosError(e) && e.response?.status === 404) {
+        addToast(
+          <span>
+            {intl.formatMessage(messages.watchlistNotOnPlex, {
+              title: movie?.title,
+              strong: (msg: React.ReactNode) => <strong>{msg}</strong>,
+            })}
+          </span>,
+          { appearance: 'error', autoDismiss: true }
+        );
+      } else {
+        addToast(intl.formatMessage(messages.watchlistError), {
+          appearance: 'error',
+          autoDismiss: true,
+        });
+      }
     }
 
     setIsUpdating(false);
