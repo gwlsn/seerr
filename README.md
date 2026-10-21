@@ -1,18 +1,19 @@
 # Patched Seerr image for Unraid
 
-[hotio's Seerr image](https://hotio.dev/containers/seerr) with the Seerr app
-rebuilt from the latest release plus the commits on the `feat/plex-watchlist`
-branch (managing the Plex watchlist from the watchlist button).
+The official Seerr image, built from the latest release plus the commits on
+the `feat/plex-watchlist` branch (managing the Plex watchlist from the
+watchlist button).
 
-Image: `ghcr.io/gwlsn/seerr:release`. It is a drop-in replacement for
-`ghcr.io/hotio/seerr:release`: same `/config`, PUID/PGID, UMASK and port.
+Image: `ghcr.io/gwlsn/seerr:latest`. It is a drop-in replacement for
+`ghcr.io/seerr-team/seerr:latest`: it is built with upstream's own Dockerfile,
+so `/app/config`, the user it runs as and port 5055 are all the same.
 
 ## How it stays up to date
 
-`.github/workflows/build.yml` runs daily. It reads which Seerr version
-`hotio/seerr:release` holds, checks out that upstream tag, cherry-picks the
-patch commits and builds on top of hotio's image. A build only happens when
-the hotio image, the patch branch or this branch changed.
+`.github/workflows/build.yml` runs daily. It finds the latest upstream
+release (pre-releases are skipped, as with the official `:latest`), checks out
+that tag, cherry-picks the patch commits and builds. A build only happens when
+the release, the patch branch or this branch changed.
 
 ## When the build fails
 
@@ -23,5 +24,5 @@ running the last image that built.
 
 ## Going back to stock
 
-Set the container's repository back to `ghcr.io/hotio/seerr:release`. The
-patch makes no database changes.
+Set the container's repository back to `ghcr.io/seerr-team/seerr:latest`.
+The patch makes no database changes.

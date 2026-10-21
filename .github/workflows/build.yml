@@ -1,7 +1,8 @@
 name: Build patched Seerr
 
-# Rebuilds when hotio publishes a new Seerr image (a new release or a base
-# image update), when the patch branch changes, or when this branch changes.
+# Builds the latest Seerr release with the patch applied, the same way the
+# official image is built. Runs when upstream publishes a new release, when
+# the patch branch changes, or when this branch changes.
 on:
   schedule:
     - cron: '23 9 * * *'
@@ -17,51 +18,40 @@ concurrency:
   group: build
 
 env:
-  BASE: hotio/seerr
-  BASE_TAG: release
   IMAGE: ghcr.io/${{ github.repository_owner }}/seerr
-  UPSTREAM: https://github.com/seerr-team/seerr
+  UPSTREAM: seerr-team/seerr
   PATCH_BRANCH: feat/plex-watchlist
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          path: build
-
-      - name: Read the hotio image
-        id: base
+      - name: Find the latest release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          token=$(curl -fsS "https://ghcr.io/token?scope=repository:$BASE:pull" | jq -r .token)
-          accept='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
-          get() {
-            curl -fsSL -H "Authorization: Bearer $token" -H "Accept: $accept" "https://ghcr.io/v2/$BASE/$1"
-          }
-
-          digest=$(get "manifests/$BASE_TAG" |
-            jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest')
-          config=$(get "manifests/$digest" | jq -r .config.digest)
-          version=$(get "blobs/$config" | jq -r '.config.Labels["org.opencontainers.image.version"]')
-
-          if [ -z "$digest" ] || [ -z "$version" ] || [ "$version" = null ]; then
-            echo "::error::Could not read the version of $BASE:$BASE_TAG"
+          # releases/latest skips pre-releases, like the official :latest tag.
+          tag=$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name)
+          if [ -z "$tag" ]; then
+            echo "::error::Could not read the latest $UPSTREAM release"
             exit 1
           fi
 
-          echo "hotio $BASE:$BASE_TAG is Seerr $version ($digest)"
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Latest release is $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Apply the patch to the release
         id: patch
         env:
-          VERSION: ${{ steps.base.outputs.version }}
+          TAG: ${{ steps.release.outputs.tag }}
         run: |
-          git clone --quiet --filter=blob:none "$UPSTREAM" seerr
+          git clone --quiet --filter=blob:none "https://github.com/$UPSTREAM" seerr
           cd seerr
-          git checkout --quiet "v$VERSION"
+          git checkout --quiet "$TAG"
+
+          # The official image reports the release commit as its version.
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
           # The patch is every commit on the patch branch that upstream does not have.
           git fetch --quiet "https://github.com/$GITHUB_REPOSITORY" "$PATCH_BRANCH"
@@ -73,7 +63,7 @@ jobs:
 
           git log --oneline --no-walk $commits
           if ! git -c user.name=build -c user.email=build@localhost cherry-pick $commits; then
-            echo "::error::The patch no longer applies to Seerr v$VERSION. Rebase $PATCH_BRANCH onto upstream and push it."
+            echo "::error::The patch no longer applies to Seerr $TAG. Rebase $PATCH_BRANCH onto upstream and push it."
             exit 1
           fi
 
@@ -88,14 +78,13 @@ jobs:
       - name: Skip if this combination was already built
         id: check
         env:
-          DIGEST: ${{ steps.base.outputs.digest }}
-          VERSION: ${{ steps.base.outputs.version }}
+          TAG: ${{ steps.release.outputs.tag }}
           PATCH_SHA: ${{ steps.patch.outputs.sha }}
         run: |
-          tag="release-$VERSION-${DIGEST:7:12}-$PATCH_SHA-${GITHUB_SHA::7}"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          if docker manifest inspect "$IMAGE:$tag" > /dev/null 2>&1; then
-            echo "$IMAGE:$tag already exists, nothing to do."
+          build_tag="$TAG-$PATCH_SHA-${GITHUB_SHA::7}"
+          echo "tag=$build_tag" >> "$GITHUB_OUTPUT"
+          if docker manifest inspect "$IMAGE:$build_tag" > /dev/null 2>&1; then
+            echo "Already built $IMAGE:$build_tag"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -106,17 +95,16 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         with:
           context: seerr
-          file: build/Dockerfile
+          file: seerr/Dockerfile
           platforms: linux/amd64
           push: true
           build-args: |
-            BASE_IMAGE=ghcr.io/${{ env.BASE }}@${{ steps.base.outputs.digest }}
-            VERSION=${{ steps.base.outputs.version }}
+            COMMIT_TAG=${{ steps.patch.outputs.commit }}
           tags: |
-            ${{ env.IMAGE }}:release
-            ${{ env.IMAGE }}:release-${{ steps.base.outputs.version }}
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ steps.release.outputs.tag }}
             ${{ env.IMAGE }}:${{ steps.check.outputs.tag }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.base.outputs.version }}
-            org.opencontainers.image.description=hotio/seerr with the ${{ env.PATCH_BRANCH }} patch
+            org.opencontainers.image.version=${{ steps.release.outputs.tag }}
+            org.opencontainers.image.description=Seerr ${{ steps.release.outputs.tag }} with the ${{ env.PATCH_BRANCH }} patch
