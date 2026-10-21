@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { before, describe, it } from 'node:test';
 
+import PlexTvAPI from '@server/api/plextv';
 import TheMovieDb from '@server/api/themoviedb';
 import type {
   TmdbMovieDetails,
@@ -79,6 +80,23 @@ Object.defineProperty(TheMovieDb.prototype, 'getTvShow', {
         created_by: [],
         videos: { results: [] },
       }) as unknown as TmdbTvDetails;
+  },
+  set() {},
+  configurable: true,
+});
+
+// The seeded users have a Plex token, so the watchlist status goes to Plex.
+Object.defineProperty(PlexTvAPI.prototype, 'getDiscoverRatingKey', {
+  get() {
+    return async () => 'rating-key';
+  },
+  set() {},
+  configurable: true,
+});
+
+Object.defineProperty(PlexTvAPI.prototype, 'isOnWatchlist', {
+  get() {
+    return async () => false;
   },
   set() {},
   configurable: true,

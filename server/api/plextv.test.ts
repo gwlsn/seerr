@@ -494,20 +494,25 @@ describe('PlexTvAPI watchlist management', () => {
 
   it('does not fall back to a title match when no TMDB id matches', async () => {
     const api = new PlexTvAPI('token');
-    mock.method(getAxios(api), 'get', async () => ({
+    const get = mock.method(getAxios(api), 'get', async () => ({
       data: searchResponse([
         { ratingKey: 'remake', title: 'Dune', year: 1984, tmdbId: 438631 },
       ]),
     }));
 
-    const ratingKey = await api.getDiscoverRatingKey({
-      tmdbId: 841,
-      type: 'movie',
-      title: 'Dune',
-      year: 1984,
-    });
+    const lookup = () =>
+      api.getDiscoverRatingKey({
+        tmdbId: 841,
+        type: 'movie',
+        title: 'Dune',
+        year: 1984,
+      });
 
-    assert.equal(ratingKey, null);
+    assert.equal(await lookup(), null);
+
+    // The miss is cached, so the search is not repeated.
+    assert.equal(await lookup(), null);
+    assert.equal(get.mock.callCount(), 1);
   });
 
   it('fetches metadata for search hits without external ids and caches the match', async () => {

@@ -184,6 +184,9 @@ const PLEX_METADATA_URL = 'https://metadata.provider.plex.tv';
 // The TMDB to Plex mapping does not change, so it is kept for a day.
 const RATING_KEY_TTL = 86400;
 
+// Titles missing from Plex are remembered for less time, as Plex may add them.
+const MISSING_RATING_KEY_TTL = 3600;
+
 // Search hits whose full metadata is fetched while looking for a TMDB match.
 const MAX_RATING_KEY_CANDIDATES = 5;
 
@@ -525,8 +528,9 @@ class PlexTvAPI extends ExternalAPI {
   }): Promise<string | null> {
     const cache = cacheManager.getCache('plextv').data;
     const cacheKey = `discover-rating-key:${type}:${tmdbId}`;
-    const cachedRatingKey = cache.get<string>(cacheKey);
-    if (cachedRatingKey) {
+    // A cached null means the title was recently looked up and not found.
+    const cachedRatingKey = cache.get<string | null>(cacheKey);
+    if (cachedRatingKey !== undefined) {
       return cachedRatingKey;
     }
 
@@ -579,6 +583,7 @@ class PlexTvAPI extends ExternalAPI {
     }
 
     if (!match) {
+      cache.set(cacheKey, null, MISSING_RATING_KEY_TTL);
       return null;
     }
 
