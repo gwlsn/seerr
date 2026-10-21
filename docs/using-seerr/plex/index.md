@@ -10,6 +10,7 @@ Seerr provides integration features that connect with your Plex media server to 
 
 ## Available Features
 
+- **Plex Watchlist** - The watchlist button on movie and series pages adds and removes titles from your Plex Watchlist. Titles added this way are picked up by [Watchlist Auto Request](./watchlist-auto-request) like any other.
 - [Watchlist Auto Request](./watchlist-auto-request) - Automatically request media from your Plex Watchlist
 - More features coming soon!
 

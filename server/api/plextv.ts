@@ -156,6 +156,37 @@ export interface PlexWatchlistCache {
   response: WatchlistResponse;
 }
 
+type PlexSearchMetadata = PlexMetadataItem & {
+  guid: string;
+  year?: number;
+};
+
+interface DiscoverSearchResponse {
+  MediaContainer?: {
+    SearchResults?: {
+      // The Metadata field has been seen as both a single object and an array.
+      SearchResult?: {
+        Metadata?: PlexSearchMetadata | PlexSearchMetadata[];
+      }[];
+    }[];
+  };
+}
+
+interface UserStateResponse {
+  MediaContainer?: {
+    UserState?: { watchlistedAt?: number } | { watchlistedAt?: number }[];
+  };
+}
+
+const PLEX_DISCOVER_URL = 'https://discover.provider.plex.tv';
+const PLEX_METADATA_URL = 'https://metadata.provider.plex.tv';
+
+// The TMDB to Plex mapping does not change, so it is kept for a day.
+const RATING_KEY_TTL = 86400;
+
+// Search hits whose full metadata is fetched while looking for a TMDB match.
+const MAX_RATING_KEY_CANDIDATES = 5;
+
 export const WATCHLIST_METADATA_CONCURRENCY = 5;
 
 async function mapWithConcurrency<T, R>(
@@ -475,6 +506,120 @@ class PlexTvAPI extends ExternalAPI {
         items: [],
       };
     }
+  }
+
+  /**
+   * Finds the Plex Discover ratingKey for a TMDB title. Only an exact TMDB id
+   * match is accepted, so a similarly named title is never returned.
+   */
+  public async getDiscoverRatingKey({
+    tmdbId,
+    type,
+    title,
+    year,
+  }: {
+    tmdbId: number;
+    type: 'movie' | 'show';
+    title: string;
+    year?: number;
+  }): Promise<string | null> {
+    const cache = cacheManager.getCache('plextv').data;
+    const cacheKey = `discover-rating-key:${type}:${tmdbId}`;
+    const cachedRatingKey = cache.get<string>(cacheKey);
+    if (cachedRatingKey) {
+      return cachedRatingKey;
+    }
+
+    const response = await this.axios.get<DiscoverSearchResponse>(
+      '/library/search',
+      {
+        baseURL: PLEX_DISCOVER_URL,
+        params: {
+          query: title,
+          searchTypes: type === 'movie' ? 'movies' : 'tv',
+          searchProviders: 'discover',
+          includeMetadata: 1,
+          includeGuids: 1,
+          limit: 20,
+        },
+        timeout: 5000,
+      }
+    );
+
+    const candidates = (
+      response.data.MediaContainer?.SearchResults ?? []
+    ).flatMap((hub) =>
+      (hub.SearchResult ?? []).flatMap((result) => result.Metadata ?? [])
+    );
+
+    const isMatch = (item: PlexMetadataItem) =>
+      item.type === type &&
+      !!item.Guid?.some((guid) => guid.id === `tmdb://${tmdbId}`);
+
+    // Search hits do not always carry their external ids, so the hits without
+    // them get their full metadata fetched, closest release year first.
+    let match = candidates.find(isMatch);
+    if (!match) {
+      const unresolved = candidates
+        .filter((item) => item.type === type && !item.Guid)
+        .sort(
+          (a, b) =>
+            Math.abs((a.year ?? 0) - (year ?? 0)) -
+            Math.abs((b.year ?? 0) - (year ?? 0))
+        )
+        .slice(0, MAX_RATING_KEY_CANDIDATES);
+
+      for (const item of unresolved) {
+        const metadata = await this.fetchWatchlistItemMetadata(item);
+        if (metadata?.tmdbId === tmdbId) {
+          match = item;
+          break;
+        }
+      }
+    }
+
+    if (!match) {
+      return null;
+    }
+
+    // The guid looks like plex://movie/5d776825880197001ec967c6
+    const ratingKey = match.guid.split('/').pop() || match.ratingKey;
+    cache.set(cacheKey, ratingKey, RATING_KEY_TTL);
+    return ratingKey;
+  }
+
+  public async isOnWatchlist(ratingKey: string): Promise<boolean> {
+    const response = await this.axios.get<UserStateResponse>(
+      `/library/metadata/${ratingKey}/userState`,
+      { baseURL: PLEX_METADATA_URL, timeout: 5000 }
+    );
+
+    const userState = [response.data.MediaContainer?.UserState ?? []].flat();
+    return userState.some((state) => !!state.watchlistedAt);
+  }
+
+  public async addToWatchlist(ratingKey: string): Promise<void> {
+    await this.updateWatchlist('addToWatchlist', ratingKey);
+  }
+
+  public async removeFromWatchlist(ratingKey: string): Promise<void> {
+    await this.updateWatchlist('removeFromWatchlist', ratingKey);
+  }
+
+  private async updateWatchlist(
+    action: 'addToWatchlist' | 'removeFromWatchlist',
+    ratingKey: string
+  ): Promise<void> {
+    // Plex answers these with a 500 when the JSON Content-Type and Accept
+    // headers are sent along with the empty body.
+    await this.axios.put(`/actions/${action}`, undefined, {
+      baseURL: PLEX_DISCOVER_URL,
+      params: { ratingKey },
+      headers: { 'Content-Type': false, Accept: false },
+      timeout: 10000,
+    });
+
+    cacheManager.getCache('plexwatchlist').data.del(this.authToken);
   }
 
   public async pingToken() {

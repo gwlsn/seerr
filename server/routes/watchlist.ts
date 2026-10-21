@@ -3,6 +3,11 @@ import {
   NotFoundError,
   Watchlist,
 } from '@server/entity/Watchlist';
+import {
+  PlexTitleNotFoundError,
+  getPlexRatingKey,
+  getPlexWatchlistClient,
+} from '@server/lib/plexWatchlist';
 import logger from '@server/logger';
 import { Router } from 'express';
 import { QueryFailedError } from 'typeorm';
@@ -12,7 +17,28 @@ import { watchlistCreate } from '@server/interfaces/api/watchlistCreate';
 
 const watchlistRoutes = Router();
 
-watchlistRoutes.post<never, Watchlist, Watchlist>(
+const updatePlexWatchlist = async (
+  action: 'add' | 'remove',
+  userId: number,
+  tmdbId: number,
+  mediaType: MediaType
+): Promise<boolean> => {
+  const plexTv = await getPlexWatchlistClient(userId);
+  if (!plexTv) {
+    return false;
+  }
+
+  const ratingKey = await getPlexRatingKey(plexTv, tmdbId, mediaType);
+  if (action === 'add') {
+    await plexTv.addToWatchlist(ratingKey);
+  } else {
+    await plexTv.removeFromWatchlist(ratingKey);
+  }
+
+  return true;
+};
+
+watchlistRoutes.post<never, Partial<Watchlist>, Watchlist>(
   '/',
   async (req, res, next) => {
     try {
@@ -24,6 +50,17 @@ watchlistRoutes.post<never, Watchlist, Watchlist>(
       }
       const values = watchlistCreate.parse(req.body);
 
+      if (
+        await updatePlexWatchlist(
+          'add',
+          req.user.id,
+          values.tmdbId,
+          values.mediaType
+        )
+      ) {
+        return res.status(201).json(values);
+      }
+
       const request = await Watchlist.createWatchlist({
         watchlistRequest: values,
         user: req.user,
@@ -34,6 +71,8 @@ watchlistRoutes.post<never, Watchlist, Watchlist>(
         return;
       }
       switch (error.constructor) {
+        case PlexTitleNotFoundError:
+          return next({ status: 404, message: error.message });
         case QueryFailedError:
           logger.warn('Something wrong with data watchlist', {
             tmdbId: req.body.tmdbId,
@@ -66,6 +105,17 @@ watchlistRoutes.delete('/:tmdbId', async (req, res, next) => {
       });
     }
 
+    if (
+      await updatePlexWatchlist(
+        'remove',
+        req.user.id,
+        Number(req.params.tmdbId),
+        mediaType
+      )
+    ) {
+      return res.status(204).send();
+    }
+
     await Watchlist.deleteWatchlist(
       Number(req.params.tmdbId),
       mediaType,
@@ -73,7 +123,7 @@ watchlistRoutes.delete('/:tmdbId', async (req, res, next) => {
     );
     return res.status(204).send();
   } catch (e) {
-    if (e instanceof NotFoundError) {
+    if (e instanceof NotFoundError || e instanceof PlexTitleNotFoundError) {
       return next({
         status: 404,
         message: e.message,

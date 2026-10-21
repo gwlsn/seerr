@@ -4,9 +4,8 @@ import TheMovieDb from '@server/api/themoviedb';
 import { ANIME_KEYWORD_ID } from '@server/api/themoviedb/constants';
 import type { TmdbKeyword } from '@server/api/themoviedb/interfaces';
 import { MediaType } from '@server/constants/media';
-import { getRepository } from '@server/datasource';
 import Media from '@server/entity/Media';
-import { Watchlist } from '@server/entity/Watchlist';
+import { isOnUserWatchlist } from '@server/lib/plexWatchlist';
 import logger from '@server/logger';
 import { mapTvResult } from '@server/models/Search';
 import { mapSeasonWithEpisodes, mapTvDetails } from '@server/models/Tv';
@@ -32,15 +31,11 @@ tvRoutes.get('/:id', async (req, res, next) => {
     });
     const media = await Media.getMedia(tv.id, MediaType.TV);
 
-    const onUserWatchlist = await getRepository(Watchlist).exist({
-      where: {
-        tmdbId: Number(req.params.id),
-        mediaType: MediaType.TV,
-        requestedBy: {
-          id: req.user?.id,
-        },
-      },
-    });
+    const onUserWatchlist = await isOnUserWatchlist(
+      req.user?.id,
+      Number(req.params.id),
+      MediaType.TV
+    );
 
     const data = mapTvDetails(tv, media?.filter(req.user), onUserWatchlist);
 

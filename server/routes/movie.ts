@@ -3,9 +3,8 @@ import RottenTomatoes from '@server/api/rating/rottentomatoes';
 import { type RatingResponse } from '@server/api/ratings';
 import TheMovieDb from '@server/api/themoviedb';
 import { MediaType } from '@server/constants/media';
-import { getRepository } from '@server/datasource';
 import Media from '@server/entity/Media';
-import { Watchlist } from '@server/entity/Watchlist';
+import { isOnUserWatchlist } from '@server/lib/plexWatchlist';
 import logger from '@server/logger';
 import { mapMovieDetails } from '@server/models/Movie';
 import { mapMovieResult } from '@server/models/Search';
@@ -24,15 +23,11 @@ movieRoutes.get('/:id', async (req, res, next) => {
 
     const media = await Media.getMedia(tmdbMovie.id, MediaType.MOVIE);
 
-    const onUserWatchlist = await getRepository(Watchlist).exist({
-      where: {
-        tmdbId: Number(req.params.id),
-        mediaType: MediaType.MOVIE,
-        requestedBy: {
-          id: req.user?.id,
-        },
-      },
-    });
+    const onUserWatchlist = await isOnUserWatchlist(
+      req.user?.id,
+      Number(req.params.id),
+      MediaType.MOVIE
+    );
 
     const data = mapMovieDetails(
       tmdbMovie,

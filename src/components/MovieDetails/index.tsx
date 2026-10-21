@@ -26,7 +26,7 @@ import useDeepLinks from '@app/hooks/useDeepLinks';
 import useLocale from '@app/hooks/useLocale';
 import useSettings from '@app/hooks/useSettings';
 import useToasts from '@app/hooks/useToasts';
-import { Permission, UserType, useUser } from '@app/hooks/useUser';
+import { Permission, useUser } from '@app/hooks/useUser';
 import globalMessages from '@app/i18n/globalMessages';
 import ErrorPage from '@app/pages/_error';
 import { sortCrewPriority } from '@app/utils/creditHelpers';
@@ -347,6 +347,7 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
           </span>,
           { appearance: 'success', autoDismiss: true }
         );
+        setToggleWatchlist((prevState) => !prevState);
       }
     } catch {
       addToast(intl.formatMessage(messages.watchlistError), {
@@ -356,7 +357,6 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
     }
 
     setIsUpdating(false);
-    setToggleWatchlist((prevState) => !prevState);
   };
 
   const onClickDeleteWatchlistBtn = async (): Promise<void> => {
@@ -375,6 +375,7 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
         </span>,
         { appearance: 'info', autoDismiss: true }
       );
+      setToggleWatchlist((prevState) => !prevState);
     } catch {
       addToast(intl.formatMessage(messages.watchlistError), {
         appearance: 'error',
@@ -382,7 +383,6 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
       });
     } finally {
       setIsUpdating(false);
-      setToggleWatchlist((prevState) => !prevState);
     }
   };
 
@@ -585,41 +585,38 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
                 </Button>
               </Tooltip>
             )}
-          {data?.mediaInfo?.status !== MediaStatus.BLOCKLISTED &&
-            user?.userType !== UserType.PLEX && (
-              <>
-                {toggleWatchlist ? (
-                  <Tooltip
-                    content={intl.formatMessage(messages.addtowatchlist)}
+          {data?.mediaInfo?.status !== MediaStatus.BLOCKLISTED && (
+            <>
+              {toggleWatchlist ? (
+                <Tooltip content={intl.formatMessage(messages.addtowatchlist)}>
+                  <Button
+                    buttonType={'ghost'}
+                    className="z-40 mr-2"
+                    buttonSize={'md'}
+                    onClick={onClickWatchlistBtn}
                   >
-                    <Button
-                      buttonType={'ghost'}
-                      className="z-40 mr-2"
-                      buttonSize={'md'}
-                      onClick={onClickWatchlistBtn}
-                    >
-                      {isUpdating ? (
-                        <Spinner />
-                      ) : (
-                        <StarIcon className={'text-amber-300'} />
-                      )}
-                    </Button>
-                  </Tooltip>
-                ) : (
-                  <Tooltip
-                    content={intl.formatMessage(messages.removefromwatchlist)}
+                    {isUpdating ? (
+                      <Spinner />
+                    ) : (
+                      <StarIcon className={'text-amber-300'} />
+                    )}
+                  </Button>
+                </Tooltip>
+              ) : (
+                <Tooltip
+                  content={intl.formatMessage(messages.removefromwatchlist)}
+                >
+                  <Button
+                    className="z-40 mr-2"
+                    buttonSize={'md'}
+                    onClick={onClickDeleteWatchlistBtn}
                   >
-                    <Button
-                      className="z-40 mr-2"
-                      buttonSize={'md'}
-                      onClick={onClickDeleteWatchlistBtn}
-                    >
-                      {isUpdating ? <Spinner /> : <MinusCircleIcon />}
-                    </Button>
-                  </Tooltip>
-                )}
-              </>
-            )}
+                    {isUpdating ? <Spinner /> : <MinusCircleIcon />}
+                  </Button>
+                </Tooltip>
+              )}
+            </>
+          )}
           <div className="z-20">
             <PlayButton links={mediaLinks} />
           </div>

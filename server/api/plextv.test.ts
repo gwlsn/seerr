@@ -430,3 +430,199 @@ describe('PlexTvAPI.getWatchlist', () => {
     });
   });
 });
+
+describe('PlexTvAPI watchlist management', () => {
+  beforeEach(() => {
+    cacheManager.getCache('plexwatchlist').flush();
+    cacheManager.getCache('plextv').flush();
+  });
+
+  afterEach(() => {
+    mock.restoreAll();
+    cacheManager.getCache('plexwatchlist').flush();
+    cacheManager.getCache('plextv').flush();
+  });
+
+  function searchResponse(
+    hits: {
+      ratingKey: string;
+      title: string;
+      year?: number;
+      type?: 'movie' | 'show';
+      tmdbId?: number;
+    }[]
+  ) {
+    return {
+      MediaContainer: {
+        SearchResults: [
+          {
+            SearchResult: hits.map((hit) => ({
+              Metadata: {
+                ratingKey: hit.ratingKey,
+                guid: `plex://${hit.type ?? 'movie'}/${hit.ratingKey}`,
+                type: hit.type ?? 'movie',
+                title: hit.title,
+                year: hit.year,
+                Guid: hit.tmdbId ? [{ id: `tmdb://${hit.tmdbId}` }] : undefined,
+              },
+            })),
+          },
+        ],
+      },
+    };
+  }
+
+  it('returns the rating key of the search hit with a matching TMDB id', async () => {
+    const api = new PlexTvAPI('token');
+    const get = mock.method(getAxios(api), 'get', async () => ({
+      data: searchResponse([
+        { ratingKey: 'remake', title: 'Dune', year: 2021, tmdbId: 438631 },
+        { ratingKey: 'original', title: 'Dune', year: 1984, tmdbId: 841 },
+      ]),
+    }));
+
+    const ratingKey = await api.getDiscoverRatingKey({
+      tmdbId: 841,
+      type: 'movie',
+      title: 'Dune',
+      year: 1984,
+    });
+
+    assert.equal(ratingKey, 'original');
+    assert.equal(get.mock.callCount(), 1);
+  });
+
+  it('does not fall back to a title match when no TMDB id matches', async () => {
+    const api = new PlexTvAPI('token');
+    mock.method(getAxios(api), 'get', async () => ({
+      data: searchResponse([
+        { ratingKey: 'remake', title: 'Dune', year: 1984, tmdbId: 438631 },
+      ]),
+    }));
+
+    const ratingKey = await api.getDiscoverRatingKey({
+      tmdbId: 841,
+      type: 'movie',
+      title: 'Dune',
+      year: 1984,
+    });
+
+    assert.equal(ratingKey, null);
+  });
+
+  it('fetches metadata for search hits without external ids and caches the match', async () => {
+    const api = new PlexTvAPI('token');
+    const get = mock.method(
+      getAxios(api),
+      'get',
+      async (url: string, config?: AxiosRequestConfig) => {
+        if (url === '/library/search') {
+          return {
+            data: searchResponse([
+              { ratingKey: 'wrong-type', title: 'Dune', type: 'show' },
+              { ratingKey: 'far', title: 'Dune', year: 2021 },
+              { ratingKey: 'near', title: 'Dune', year: 1984 },
+            ]),
+          };
+        }
+
+        const ratingKey = url.split('/library/metadata/')[1];
+        return axiosResponse(config as InternalAxiosRequestConfig, {
+          MediaContainer: {
+            Metadata: [
+              {
+                ratingKey,
+                type: 'movie',
+                title: 'Dune',
+                Guid: [
+                  { id: ratingKey === 'near' ? 'tmdb://841' : 'tmdb://1' },
+                ],
+              },
+            ],
+          },
+        });
+      }
+    );
+
+    const lookup = () =>
+      api.getDiscoverRatingKey({
+        tmdbId: 841,
+        type: 'movie',
+        title: 'Dune',
+        year: 1984,
+      });
+
+    assert.equal(await lookup(), 'near');
+    assert.deepEqual(
+      get.mock.calls.map((call) => call.arguments[0]),
+      ['/library/search', '/library/metadata/near']
+    );
+
+    assert.equal(await lookup(), 'near');
+    assert.equal(get.mock.callCount(), 2);
+  });
+
+  it('reads the watchlist state from the user state', async () => {
+    const api = new PlexTvAPI('token');
+    const states = [
+      { UserState: { watchlistedAt: 1700000000 } },
+      { UserState: [{ watchlistedAt: 1700000000 }] },
+      { UserState: {} },
+      {},
+    ];
+    mock.method(getAxios(api), 'get', async () => ({
+      data: { MediaContainer: states.shift() },
+    }));
+
+    assert.equal(await api.isOnWatchlist('rk'), true);
+    assert.equal(await api.isOnWatchlist('rk'), true);
+    assert.equal(await api.isOnWatchlist('rk'), false);
+    assert.equal(await api.isOnWatchlist('rk'), false);
+  });
+
+  it('updates the watchlist without JSON headers and clears the cached watchlist', async () => {
+    const api = new TestPlexTvAPI('token');
+    const requests: InternalAxiosRequestConfig[] = [];
+    api.installAdapter(async (config) => {
+      requests.push(config);
+      return axiosResponse(config, '');
+    });
+    watchlistCache().set<PlexWatchlistCache>('token', {
+      response: watchlistResponse(1),
+    });
+
+    await api.addToWatchlist('rk-add');
+    await api.removeFromWatchlist('rk-remove');
+
+    assert.deepEqual(
+      requests.map((request) => [
+        request.method,
+        request.baseURL,
+        request.url,
+        request.params,
+      ]),
+      [
+        [
+          'put',
+          'https://discover.provider.plex.tv',
+          '/actions/addToWatchlist',
+          { ratingKey: 'rk-add' },
+        ],
+        [
+          'put',
+          'https://discover.provider.plex.tv',
+          '/actions/removeFromWatchlist',
+          { ratingKey: 'rk-remove' },
+        ],
+      ]
+    );
+    for (const request of requests) {
+      // Headers set to false are left out when the request is sent.
+      const headers = request.headers.toJSON();
+      assert.equal(headers['X-Plex-Token'], 'token');
+      assert.equal('Content-Type' in headers, false);
+      assert.equal('Accept' in headers, false);
+    }
+    assert.equal(watchlistCache().get('token'), undefined);
+  });
+});
