@@ -1,0 +1,122 @@
+name: Build patched Seerr
+
+# Rebuilds when hotio publishes a new Seerr image (a new release or a base
+# image update), when the patch branch changes, or when this branch changes.
+on:
+  schedule:
+    - cron: '23 9 * * *'
+  workflow_dispatch:
+  push:
+    branches: [unraid]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build
+
+env:
+  BASE: hotio/seerr
+  BASE_TAG: release
+  IMAGE: ghcr.io/${{ github.repository_owner }}/seerr
+  UPSTREAM: https://github.com/seerr-team/seerr
+  PATCH_BRANCH: feat/plex-watchlist
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: build
+
+      - name: Read the hotio image
+        id: base
+        run: |
+          token=$(curl -fsS "https://ghcr.io/token?scope=repository:$BASE:pull" | jq -r .token)
+          accept='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
+          get() {
+            curl -fsSL -H "Authorization: Bearer $token" -H "Accept: $accept" "https://ghcr.io/v2/$BASE/$1"
+          }
+
+          digest=$(get "manifests/$BASE_TAG" |
+            jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest')
+          config=$(get "manifests/$digest" | jq -r .config.digest)
+          version=$(get "blobs/$config" | jq -r '.config.Labels["org.opencontainers.image.version"]')
+
+          if [ -z "$digest" ] || [ -z "$version" ] || [ "$version" = null ]; then
+            echo "::error::Could not read the version of $BASE:$BASE_TAG"
+            exit 1
+          fi
+
+          echo "hotio $BASE:$BASE_TAG is Seerr $version ($digest)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Apply the patch to the release
+        id: patch
+        env:
+          VERSION: ${{ steps.base.outputs.version }}
+        run: |
+          git clone --quiet --filter=blob:none "$UPSTREAM" seerr
+          cd seerr
+          git checkout --quiet "v$VERSION"
+
+          # The patch is every commit on the patch branch that upstream does not have.
+          git fetch --quiet "https://github.com/$GITHUB_REPOSITORY" "$PATCH_BRANCH"
+          commits=$(git rev-list --reverse --no-merges origin/develop..FETCH_HEAD)
+          if [ -z "$commits" ]; then
+            echo "::error::No patch commits found on $PATCH_BRANCH"
+            exit 1
+          fi
+
+          git log --oneline --no-walk $commits
+          if ! git -c user.name=build -c user.email=build@localhost cherry-pick $commits; then
+            echo "::error::The patch no longer applies to Seerr v$VERSION. Rebase $PATCH_BRANCH onto upstream and push it."
+            exit 1
+          fi
+
+          echo "sha=$(git rev-parse --short FETCH_HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip if this combination was already built
+        id: check
+        env:
+          DIGEST: ${{ steps.base.outputs.digest }}
+          VERSION: ${{ steps.base.outputs.version }}
+          PATCH_SHA: ${{ steps.patch.outputs.sha }}
+        run: |
+          tag="release-$VERSION-${DIGEST:7:12}-$PATCH_SHA-${GITHUB_SHA::7}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if docker manifest inspect "$IMAGE:$tag" > /dev/null 2>&1; then
+            echo "$IMAGE:$tag already exists, nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.check.outputs.skip != 'true'
+
+      - uses: docker/build-push-action@v6
+        if: steps.check.outputs.skip != 'true'
+        with:
+          context: seerr
+          file: build/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            BASE_IMAGE=ghcr.io/${{ env.BASE }}@${{ steps.base.outputs.digest }}
+            VERSION=${{ steps.base.outputs.version }}
+          tags: |
+            ${{ env.IMAGE }}:release
+            ${{ env.IMAGE }}:release-${{ steps.base.outputs.version }}
+            ${{ env.IMAGE }}:${{ steps.check.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.base.outputs.version }}
+            org.opencontainers.image.description=hotio/seerr with the ${{ env.PATCH_BRANCH }} patch
