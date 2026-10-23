@@ -41,9 +41,9 @@ import {
   DisclosurePanel,
   Transition,
 } from '@headlessui/react';
-import { ChevronDownIcon } from '@heroicons/react/24/outline';
 import {
   ArrowRightCircleIcon,
+  ChevronDownIcon,
   CogIcon,
   ExclamationTriangleIcon,
   EyeSlashIcon,
@@ -51,7 +51,7 @@ import {
   MinusCircleIcon,
   PlayIcon,
   StarIcon,
-} from '@heroicons/react/24/solid';
+} from '@heroicons/react/24/outline';
 import type { RTRating } from '@server/api/rating/rottentomatoes';
 import { ANIME_KEYWORD_ID } from '@server/api/themoviedb/constants';
 import { IssueStatus } from '@server/constants/issue';
